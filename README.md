@@ -15,6 +15,9 @@ BarkestSsh::SecureShell.new(
 end
 ```
 
+This gem was primarily developed to be added into [Barker EST](http://www.barkerest.com/) web applications (hence the name).
+
+
 ## Installation
 
 Add this line to your application's Gemfile:
