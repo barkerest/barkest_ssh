@@ -48,3 +48,4 @@ Bug reports and pull requests are welcome on GitHub at https://github.com/barker
 
 The gem is available as open source under the terms of the [MIT License](http://opensource.org/licenses/MIT).
 
+Copyright (c) 2016 [Beau Barker](mailto:beau@barkerest.com)
