@@ -8,3 +8,6 @@
 /spec/reports/
 /tmp/
 /.idea
+**/.DS_Store
+**/.byebug*
+
