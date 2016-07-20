@@ -12,6 +12,31 @@ module BarkestSsh
   class SecureShell
 
     ##
+    # An error occurring within the SecureShell class aside from argument errors.
+    ShellError = Class.new(StandardError)
+
+    ##
+    # An exception raised when a command requiring a connection is attempted after the connection has been closed.
+    ConnectionClosed = Class.new(ShellError)
+
+    ##
+    # An exception raised when the SSH session fails to request a PTY.
+    FailedToRequestPTY = Class.new(ShellError)
+
+    ##
+    # An exception raised when the SSH session fails to start a shell.
+    FailedToStartShell = Class.new(ShellError)
+
+    ##
+    # An exception raised when the SSH shell session fails to execute.
+    #
+    FailedToExecute = Class.new(ShellError)
+
+    ##
+    # An exception raised when the shell session is silent too long.
+    LongSilence = Class.new(ShellError)
+
+    ##
     # Creates a SecureShell session and executes the provided block.
     #
     # You must provide a code block to run within the shell session, the session is closed before this returns.
@@ -32,6 +57,12 @@ module BarkestSsh
     #     The characters you should avoid are !, $, \, /, ", and ' because no attempt is made to escape them and the
     #     resulting prompt can very easily become something else entirely.  If they are provided, they will be
     #     replaced to protect the shell from getting stuck.
+    # *   +silence_wait+
+    #     The number of seconds to wait when the shell is not sending back data to send a newline.  This can help
+    #     battle background tasks burying the prompt, but it might not play nice with long-running foreground tasks.
+    #     The default is 5 seconds, if you notice problems, set this to a higher value, or 0 to disable.
+    #     During extended silence, the first time this value elapses, the shell will send the newline, the second time
+    #     the shell will error out.
     #
     #   SecureShell.new(
     #       host: '10.10.10.10',
@@ -50,14 +81,15 @@ module BarkestSsh
           port: options[:port] || 22,
           user: options[:user],
           password: options[:password],
-          prompt: options[:prompt].blank? ? '~~#' : options[:prompt]
+          prompt: (options[:prompt].to_s.strip == '') ? '~~#' : options[:prompt],
+          silence_wait: 5
       }
 
       raise ArgumentError.new('Missing block.') unless block_given?
-      raise ArgumentError.new('Missing host.') if @options[:host].blank?
-      raise ArgumentError.new('Missing user.') if @options[:user].blank?
-      raise ArgumentError.new('Missing password.') if @options[:password].blank?
-      raise ArgumentError.new('Missing prompt.') if @options[:prompt].blank?
+      raise ArgumentError.new('Missing host.') if @options[:host].to_s.strip == ''
+      raise ArgumentError.new('Missing user.') if @options[:user].to_s.strip == ''
+      raise ArgumentError.new('Missing password.') if @options[:password].to_s.strip == ''
+      raise ArgumentError.new('Missing prompt.') if @options[:prompt].to_s.strip == ''
 
       @options[:prompt] = @options[:prompt]
                               .gsub('!', '#')
@@ -67,6 +99,8 @@ module BarkestSsh
                               .gsub('"', '-')
                               .gsub('\'', '-')
 
+      executed = false
+
       Net::SSH.start(
           @options[:host],
           @options.delete(:user),
@@ -75,9 +109,10 @@ module BarkestSsh
       ) do |ssh|
         ssh.open_channel do |channel|
           channel.request_pty do |channel, success|
-            raise StandardError.new('Failed to request PTY.') unless success
-            channel.send_channel_request('shell') do |channel, success|
-              raise StandardError.new('Failed to start shell.') unless success
+            raise FailedToRequestPTY.new('Failed to request PTY.') unless success
+
+            channel.send_channel_request('shell') do |_, success|
+              raise FailedToStartShell.new('Failed to start shell.') unless success
 
               # cache the channel pointer and start buffering the input.
               @channel = channel
@@ -87,9 +122,14 @@ module BarkestSsh
               sleep 0.25
 
               # set the shell prompt so that we can determine when processes end.
+              # does not work with background processes since we are looking for
+              # the shell to send us this when it is ready for more input.
+              # a background process can easily bury the prompt and then we are stuck in a loop.
               exec "PS1=\"#{@options[:prompt]}\""
 
               block.call(self)
+
+              executed = true
 
               # send the exit command and remove the channel pointer.
               quit
@@ -99,6 +139,8 @@ module BarkestSsh
           channel.wait
         end
       end
+
+      raise FailedToExecute.new('Failed to execute shell.') unless executed
     end
 
     ##
@@ -119,7 +161,7 @@ module BarkestSsh
     #   end
     #
     def exec(command, &block)
-      raise StandardError.new('Connection is closed.') unless @channel
+      raise ConnectionClosed.new('Connection is closed.') unless @channel
 
       push_buffer # store the current buffer and start a fresh buffer
 
@@ -148,7 +190,7 @@ module BarkestSsh
       # We also check for those rare times when a prompt manages to sneak in, trimming them off the front as well.
       result_cmd,_,result_data = ret.partition("\n")
       cmd_with_prompt = @options[:prompt] + command
-      until result_cmd == command || result_cmd == cmd_with_prompt || result_data.blank?
+      until result_cmd == command || result_cmd == cmd_with_prompt || result_data.to_s.strip == ''
         result_cmd,_,result_data = result_data.partition("\n")
       end
       result_data
@@ -195,7 +237,7 @@ module BarkestSsh
     private
 
     def quit
-      raise StandardError.new('Connection is closed.') unless @channel
+      raise ConnectionClosed.new('Connection is closed.') unless @channel
       @channel.send_data("exit\n")
       @channel.wait
     end
@@ -248,17 +290,12 @@ module BarkestSsh
     end
 
     def append_stdout(data, &block)
-      # If the prompt appears in the output, then the program must have returned control to the shell.
-      # It may continue running in the background, but the shell is now ready for more input.
-      # And if the the program decides to spit out more data, we don't lose our shell and end up in
-      # a locked state.
-      set_prompted if data.include?(@options[:prompt])
-
       # Combined output gets the prompts,
       # but stdout will be without prompts.
       # All line endings are converted to LF.
       data = data.gsub("\r\n", "\n").gsub("\r", "\n")
       for_stdout = if data[-(@options[:prompt].length)..-1] == @options[:prompt]
+                     set_prompted
                      data[0...-(@options[:prompt].length)]
                    else
                      data
@@ -291,7 +328,7 @@ module BarkestSsh
     end
 
     def buffer_input(&block)
-      raise StandardError.new('Connection is closed.') unless @channel
+      raise ConnectionClosed.new('Connection is closed.') unless @channel
       block ||= Proc.new { }
       @channel.on_data do |_, data|
         append_stdout strip_ansi_escape(data), &block
@@ -301,13 +338,33 @@ module BarkestSsh
           append_stderr strip_ansi_escap(data), &block
         end
       end
+      @last_input = Time.now
     end
 
     def wait_for_prompt
-      raise StandardError.new('Connection is closed.') unless @channel
+      raise ConnectionClosed.new('Connection is closed.') unless @channel
+
+      wait_timeout = @options[:silence_wait].to_s.to_i
+      @last_input ||= Time.now
+      sent_nl_at = nil
+      my_shell = self
+
       @channel.connection.loop do
+        last_input = my_shell.instance_variable_get(:@last_input)
+        if wait_timeout > 0 && (Time.now - last_input) > wait_timeout
+          if sent_nl_at >= last_input
+            raise LongSilence.new('No input from shell for extended period.')
+          else
+            # reset the timer
+            sent_nl_at = Time.now
+            my_shell.instance_variable_set(:@last_input, sent_nl_at)
+            # and send the NL
+            @channel.send_data "\n"
+          end
+        end
         !prompted?
       end
+
       reset_prompted
     end
 
