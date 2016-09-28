@@ -292,8 +292,8 @@ module BarkestSsh
     def append_stdout(data, &block)
       # Combined output gets the prompts,
       # but stdout will be without prompts.
-      # All line endings are converted to LF.
-      data = data.gsub("\r\n", "\n").gsub("\r", "\n")
+      # CRLF are converted to LF and CR are removed.
+      data = data.gsub("\r\n", "\n").gsub("\r", '')
       for_stdout = if data[-(@options[:prompt].length)..-1] == @options[:prompt]
                      set_prompted
                      data[0...-(@options[:prompt].length)]
