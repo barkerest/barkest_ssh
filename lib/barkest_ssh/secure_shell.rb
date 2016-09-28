@@ -293,7 +293,10 @@ module BarkestSsh
       # Combined output gets the prompts,
       # but stdout will be without prompts.
       # CRLF are converted to LF and CR are removed.
-      data = data.gsub("\r\n", "\n").gsub("\r", '')
+      # The " \r" sequence appears to be a line continuation sequence for the shell.
+      # So if we encounter it after converting CRLF to LF, then we treat it the same as a rogue CR.
+      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", '')
+
       for_stdout = if data[-(@options[:prompt].length)..-1] == @options[:prompt]
                      set_prompted
                      data[0...-(@options[:prompt].length)]
@@ -313,8 +316,8 @@ module BarkestSsh
     end
 
     def append_stderr(data, &block)
-      # All line endings are converted to LF.
-      data = data.gsub("\r\n", "\n").gsub("\r", "\n")
+      # CRLF are converted to LF and CR are removed.
+      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", '')
 
       @stderr = @stderr.to_s + data
       @stdcomb = @stdcomb.to_s + data
