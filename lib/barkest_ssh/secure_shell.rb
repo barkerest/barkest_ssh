@@ -335,7 +335,7 @@ module BarkestSsh
       end
       @channel.on_extended_data do |_, type, data|
         if type == 1
-          append_stderr strip_ansi_escap(data), &block
+          append_stderr strip_ansi_escape(data), &block
         end
       end
       @last_input = Time.now
