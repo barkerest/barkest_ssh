@@ -1,5 +1,6 @@
 
 require 'net/ssh'
+require 'net/sftp'
 
 module BarkestSsh
 
@@ -101,12 +102,14 @@ module BarkestSsh
 
       executed = false
 
+      @sftp = nil
       Net::SSH.start(
           @options[:host],
-          @options.delete(:user),
-          password: @options.delete(:password),
+          @options[:user],
+          password: @options[:password],
           port: @options[:port]
       ) do |ssh|
+        @ssh = ssh
         ssh.open_channel do |channel|
           channel.request_pty do |channel, success|
             raise FailedToRequestPTY.new('Failed to request PTY.') unless success
@@ -139,6 +142,17 @@ module BarkestSsh
           channel.wait
         end
       end
+
+      @ssh = nil
+
+      if @sftp
+        @sftp.session.close
+        @sftp = nil
+      end
+
+      # remove the cached user and password.
+      options.delete(:user)
+      options.delete(:password)
 
       raise FailedToExecute.new('Failed to execute shell.') unless executed
     end
@@ -194,6 +208,38 @@ module BarkestSsh
         result_cmd,_,result_data = result_data.partition("\n")
       end
       result_data
+    end
+
+    ##
+    # Uses SFTP to upload a single file to the host.
+    def upload(local_file, remote_file)
+      raise ConnectionClosed.new('Connection is closed.') unless @ssh
+      sftp.upload!(local_file, remote_file)
+    end
+
+    ##
+    # Uses SFTP to download a single file from the host.
+    def download(remote_file, local_file)
+      raise ConnectionClosed.new('Connection is closed.') unless @ssh
+      sftp.download!(remote_file, local_file)
+    end
+
+    ##
+    # Uses SFTP to read the contents of a single file.
+    #
+    # Returns the contents of the file.
+    def read_file(remote_file)
+      raise ConnectionClosed.new('Connection is closed.') unless @ssh
+      sftp.download!(remote_file)
+    end
+
+    ##
+    # Uses SFTP to write data to a single file.
+    def write_file(remote_file, data)
+      raise ConnectionClosed.new('Connection is closed.') unless @ssh
+      sftp.file.open(remote_file, 'w') do |f|
+        f.write data
+      end
     end
 
     ##
@@ -355,7 +401,7 @@ module BarkestSsh
       @channel.connection.loop do
         last_input = my_shell.instance_variable_get(:@last_input)
         if wait_timeout > 0 && (Time.now - last_input) > wait_timeout
-          if sent_nl_at >= last_input
+          if sent_nl_at && sent_nl_at >= last_input
             raise LongSilence.new('No input from shell for extended period.')
           else
             # reset the timer
@@ -375,6 +421,11 @@ module BarkestSsh
       data
           .gsub(/\e\[=?(\d+;?)*[A-Za-z]/,'')    #   \e[#;#;#A or \e[=#;#;#A
           .gsub(/\e\[(\d+;"[^"]+";?)+p/, '')    #   \e[#;"A"p
+    end
+
+    def sftp
+      raise ConnectionClosed.new('Connection is closed.') unless @ssh
+      @sftp ||= ::Net::SFTP.start(@options[:host], @options[:user], password: @options[:password])
     end
 
   end
