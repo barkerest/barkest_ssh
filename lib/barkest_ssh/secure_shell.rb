@@ -83,7 +83,7 @@ module BarkestSsh
           user: options[:user],
           password: options[:password],
           prompt: (options[:prompt].to_s.strip == '') ? '~~#' : options[:prompt],
-          silence_wait: 5
+          silence_wait: (options[:silence_wait] || 5)
       }
 
       raise ArgumentError.new('Missing block.') unless block_given?
