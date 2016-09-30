@@ -380,15 +380,19 @@ module BarkestSsh
     def buffer_input(&block)
       raise ConnectionClosed.new('Connection is closed.') unless @channel
       block ||= Proc.new { }
+
+      @last_input = Time.now
+
       @channel.on_data do |_, data|
         append_stdout strip_ansi_escape(data), &block
       end
+
       @channel.on_extended_data do |_, type, data|
         if type == 1
           append_stderr strip_ansi_escape(data), &block
         end
       end
-      @last_input = Time.now
+
     end
 
     def wait_for_prompt
@@ -398,22 +402,29 @@ module BarkestSsh
       @last_input ||= Time.now
       sent_nl_at = nil
       sent_nl_times = 0
-      my_shell = self
 
       @channel.connection.loop do
-        last_input = my_shell.instance_variable_get(:@last_input)
+        # cache the last input, this way if something is received it doesn't screw with us.
+        last_input = @last_input
+
+        # do we need to nudge the shell?
         if wait_timeout > 0 && (Time.now - last_input) > wait_timeout
-          if sent_nl_times > 2 && sent_nl_at && sent_nl_at >= last_input
+
+          # have we nudged the shell more than twice?
+          if sent_nl_times > 2
             raise LongSilence.new('No input from shell for extended period.')
           else
-            # reset the timer
-            sent_nl_times = sent_nl_at ? (sent_nl_times + 1) : 1
+
+            # reset the timer and increment the counter if the timer hasn't budged since we last nudged it.
+            sent_nl_times = (sent_nl_at.nil? || sent_nl_at < last_input) ? 1 : (sent_nl_times + 1)
             sent_nl_at = Time.now
-            my_shell.instance_variable_set(:@last_input, sent_nl_at)
-            # and send the NL
+
+            # and send the NL to nudge along the shell.
             @channel.send_data "\n"
+            @last_input = sent_nl_at
           end
         end
+
         !prompted?
       end
 
