@@ -397,15 +397,17 @@ module BarkestSsh
       wait_timeout = @options[:silence_wait].to_s.to_i
       @last_input ||= Time.now
       sent_nl_at = nil
+      sent_nl_times = 0
       my_shell = self
 
       @channel.connection.loop do
         last_input = my_shell.instance_variable_get(:@last_input)
         if wait_timeout > 0 && (Time.now - last_input) > wait_timeout
-          if sent_nl_at && sent_nl_at >= last_input
+          if sent_nl_times > 2 && sent_nl_at && sent_nl_at >= last_input
             raise LongSilence.new('No input from shell for extended period.')
           else
             # reset the timer
+            sent_nl_times = sent_nl_at ? (sent_nl_times + 1) : 1
             sent_nl_at = Time.now
             my_shell.instance_variable_set(:@last_input, sent_nl_at)
             # and send the NL
