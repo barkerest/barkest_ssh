@@ -108,7 +108,7 @@ module BarkestSsh
           @options[:user],
           password: @options[:password],
           port: @options[:port],
-          auth_methods: %w(password),
+          non_interactive: true,
       ) do |ssh|
         @ssh = ssh
         ssh.open_channel do |channel|
