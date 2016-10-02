@@ -433,6 +433,7 @@ module BarkestSsh
 
     def strip_ansi_escape(data)
       data
+          .gsub(/\e\[(\d+;?)*[ABCDEFGHfu]/, "\n")  # any of the "set cursor position" commands.
           .gsub(/\e\[=?(\d+;?)*[A-Za-z]/,'')    #   \e[#;#;#A or \e[=#;#;#A
           .gsub(/\e\[(\d+;"[^"]+";?)+p/, '')    #   \e[#;"A"p
     end
