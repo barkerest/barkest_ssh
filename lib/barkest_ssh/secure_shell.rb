@@ -340,9 +340,9 @@ module BarkestSsh
       # Combined output gets the prompts,
       # but stdout will be without prompts.
       # CRLF are converted to LF and CR are removed.
-      # The " \r" sequence appears to be a line continuation sequence for the shell.
-      # So if we encounter it after converting CRLF to LF, then we treat it the same as a rogue CR.
-      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", '')
+      # The " \r" sequence appears to be a line continuation sequence for the shell, so it get's removed.
+      # All remaining CR are replaced with LF.
+      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", "\n")
 
       for_stdout = if data[-(@options[:prompt].length)..-1] == @options[:prompt]
                      set_prompted
@@ -363,8 +363,7 @@ module BarkestSsh
     end
 
     def append_stderr(data, &block)
-      # CRLF are converted to LF and CR are removed.
-      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", '')
+      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", "\n")
 
       @stderr = @stderr.to_s + data
       @stdcomb = @stdcomb.to_s + data
@@ -436,6 +435,10 @@ module BarkestSsh
           .gsub(/\e\[(\d+;?)*[ABCDEFGHfu]/, "\n")  # any of the "set cursor position" commands.
           .gsub(/\e\[=?(\d+;?)*[A-Za-z]/,'')    #   \e[#;#;#A or \e[=#;#;#A
           .gsub(/\e\[(\d+;"[^"]+";?)+p/, '')    #   \e[#;"A"p
+          .gsub(/\e[NOc]/,'')
+          .gsub(/\e[P_\]^X](\a|(\e\\))/,'')     # any string command
+          .gsub(/[\x00\x08\x0B\x0C\x0E-\x1F]/, '')  # any non-printable characters.
+          .gsub("\t", ' ')                      # turn tabs into spaces.
     end
 
     def sftp
