@@ -83,7 +83,8 @@ module BarkestSsh
           user: options[:user],
           password: options[:password],
           prompt: (options[:prompt].to_s.strip == '') ? '~~#' : options[:prompt],
-          silence_wait: (options[:silence_wait] || 5)
+          silence_wait: (options[:silence_wait] || 5),
+          replace_cr: options[:replace_cr].to_s
       }
 
       raise ArgumentError.new('Missing block.') unless block_given?
@@ -91,6 +92,8 @@ module BarkestSsh
       raise ArgumentError.new('Missing user.') if @options[:user].to_s.strip == ''
       raise ArgumentError.new('Missing password.') if @options[:password].to_s.strip == ''
       raise ArgumentError.new('Missing prompt.') if @options[:prompt].to_s.strip == ''
+
+
 
       @options[:prompt] = @options[:prompt]
                               .gsub('!', '#')
@@ -342,7 +345,7 @@ module BarkestSsh
       # CRLF are converted to LF and CR are removed.
       # The " \r" sequence appears to be a line continuation sequence for the shell, so it get's removed.
       # All remaining CR are replaced with LF.
-      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", "\n")
+      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", @options[:replace_cr])
 
       for_stdout = if data[-(@options[:prompt].length)..-1] == @options[:prompt]
                      set_prompted
@@ -363,7 +366,7 @@ module BarkestSsh
     end
 
     def append_stderr(data, &block)
-      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", "\n")
+      data = data.gsub("\r\n", "\n").gsub(" \r", '').gsub("\r", @options[:replace_cr])
 
       @stderr = @stderr.to_s + data
       @stdcomb = @stdcomb.to_s + data
