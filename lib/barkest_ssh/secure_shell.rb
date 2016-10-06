@@ -432,13 +432,13 @@ module BarkestSsh
 
     def strip_ansi_escape(data)
       data
-          .gsub(/\e\[(\d+;?)*[ABCDEFGHfu]/, "\n")  # any of the "set cursor position" commands.
-          .gsub(/\e\[=?(\d+;?)*[A-Za-z]/,'')    #   \e[#;#;#A or \e[=#;#;#A
-          .gsub(/\e\[(\d+;"[^"]+";?)+p/, '')    #   \e[#;"A"p
-          .gsub(/\e[NOc]/,'')
-          .gsub(/\e[P_\]^X](\a|(\e\\))/,'')     # any string command
-          .gsub(/[\x00\x08\x0B\x0C\x0E-\x1F]/, '')  # any non-printable characters.
-          .gsub("\t", ' ')                      # turn tabs into spaces.
+          .gsub(/\e\[(\d+;?)*[ABCDEFGHfu]/, "\n")   #   any of the "set cursor position" CSI commands.
+          .gsub(/\e\[=?(\d+;?)*[A-Za-z]/,'')        #   \e[#;#;#A or \e[=#;#;#A  basically all the CSI commands except ...
+          .gsub(/\e\[(\d+;"[^"]+";?)+p/, '')        #   \e[#;"A"p
+          .gsub(/\e[NOc]./,'?')                     #   any of the alternate character set commands.
+          .gsub(/\e[P_\]^X][^\e\a]*(\a|(\e\\))/,'') #   any string command
+          .gsub(/[\x00\x08\x0B\x0C\x0E-\x1F]/, '')  #   any non-printable characters.
+          .gsub("\t", ' ')                          #   turn tabs into spaces.
     end
 
     def sftp
