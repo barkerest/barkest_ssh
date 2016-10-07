@@ -38,6 +38,10 @@ module BarkestSsh
     LongSilence = Class.new(ShellError)
 
     ##
+    # A command exited with a non-zero status.
+    NonZeroExitCode = Class.new(ShellError)
+
+    ##
     # Creates a SecureShell session and executes the provided block.
     #
     # You must provide a code block to run within the shell session, the session is closed before this returns.
@@ -64,6 +68,18 @@ module BarkestSsh
     #     The default is 5 seconds, if you notice problems, set this to a higher value, or 0 to disable.
     #     During extended silence, the first time this value elapses, the shell will send the newline, the second time
     #     the shell will error out.
+    # *   +replace_cr+
+    #     The string to replace stand-alone CR characters with.  The default is an empty string (ie - remove them).
+    #     You may also want to replace with a LF character instead, which is the behavior taken when a CR+ LF sequence
+    #     is encountered.  A space followed by a standalone CR is treated differently since these seem to occur when
+    #     the terminal ouput wraps.  In these cases, the SPACE + CR sequence is simply removed.
+    # *   +retrieve_exit_code+
+    #     Version 1.1.10 introduces support for grabbing the exit code from the last command and then performing an
+    #     action.  The default value is true, but if you set this to false then the shell will not retrieve the exit
+    #     codes automatically.
+    # *   +on_non_zero_exit_code+
+    #     If the exit code is non-zero, the default behavior (to remain compatible with prior versions) is to
+    #     ignore the exit code.  You can also set this to :raise_error to raise the NonZeroExitCode error.
     #
     #   SecureShell.new(
     #       host: '10.10.10.10',
@@ -84,7 +100,9 @@ module BarkestSsh
           password: options[:password],
           prompt: (options[:prompt].to_s.strip == '') ? '~~#' : options[:prompt],
           silence_wait: (options[:silence_wait] || 5),
-          replace_cr: options[:replace_cr].to_s
+          replace_cr: options[:replace_cr].to_s,
+          retrieve_exit_code: options[:retrieve_exit_code].nil? ? true : options[:retrieve_exit_code],
+          on_non_zero_exit_code: options[:on_non_zero_exit_code] ? options[:on_non_zero_exit_code].to_s.to_sym : :ignore
       }
 
       raise ArgumentError.new('Missing block.') unless block_given?
@@ -92,8 +110,7 @@ module BarkestSsh
       raise ArgumentError.new('Missing user.') if @options[:user].to_s.strip == ''
       raise ArgumentError.new('Missing password.') if @options[:password].to_s.strip == ''
       raise ArgumentError.new('Missing prompt.') if @options[:prompt].to_s.strip == ''
-
-
+      raise ArgumentError.new('Invalid option for on_non_zero_exit_code.') unless [:ignore, :raise_error].include?(@options[:on_non_zero_exit_code])
 
       @options[:prompt] = @options[:prompt]
                               .gsub('!', '#')
@@ -105,6 +122,7 @@ module BarkestSsh
 
       executed = false
 
+      @last_exit_code = 0
       @sftp = nil
       Net::SSH.start(
           @options[:host],
@@ -162,11 +180,32 @@ module BarkestSsh
     end
 
     ##
+    # Gets the last exit code.
+    def last_exit_code
+      @last_exit_code || 0
+    end
+
+    ##
+    # Wrapper for +exec+ that will ignore non-zero exit codes.
+    def exec_ignore(command, &block)
+      exec command, on_non_zero_exit_code: :ignore, &block
+    end
+
+    ##
+    # Wrapper for +exec+ that will raise an error on non-zero exit codes.
+    def exec_raise(command, &block)
+      exec command, on_non_zero_exit_code: :raise_error, &block
+    end
+
+    ##
     # Executes a command during the shell session.
     #
     # If called outside of the +new+ block, this will raise an error.
     #
     # The +command+ is the command to execute in the shell.
+    #
+    # The +options+ parameter can include the following keys.
+    # *  The :on_non_zero_exit_code option can be :default, :ignore, or :raise_error.
     #
     # If provided, the +block+ is a chunk of code that will be processed every time the
     # shell receives output from the program.  If the block returns a string, the string
@@ -178,8 +217,14 @@ module BarkestSsh
     #     nil
     #   end
     #
-    def exec(command, &block)
+    def exec(command, options={}, &block)
       raise ConnectionClosed.new('Connection is closed.') unless @channel
+
+      options = {
+          on_non_zero_exit_code: :default
+      }.merge(options || {})
+
+      options[:on_non_zero_exit_code] = @options[:on_non_zero_exit_code] if options[:on_non_zero_exit_code] == :default
 
       push_buffer # store the current buffer and start a fresh buffer
 
@@ -198,20 +243,66 @@ module BarkestSsh
       end
 
       # get the output from the command, minus the trailing prompt.
-      ret = combined_output[0...-(@options[:prompt].length)].strip
+      ret = command_output(command)
 
       # restore the original buffer and merge the output from the command.
       pop_merge_buffer
 
-      # return the output from the command starting with the second line.
-      # the first line is the command sent to the shell.
-      # We also check for those rare times when a prompt manages to sneak in, trimming them off the front as well.
-      result_cmd,_,result_data = ret.partition("\n")
-      cmd_with_prompt = @options[:prompt] + command
-      until result_cmd == command || result_cmd == cmd_with_prompt || result_data.to_s.strip == ''
-        result_cmd,_,result_data = result_data.partition("\n")
+      if @options[:retrieve_exit_code]
+        # get the exit code for the command.
+        push_buffer
+        retrieve_command = 'echo $?'
+        @channel.send_data retrieve_command + "\n"
+        wait_for_prompt
+        @last_exit_code = command_output(retrieve_command).strip.to_i
+        # restore the original buffer and discard the output from this command.
+        pop_discard_buffer
+
+        # if we are expected to raise an error, do so.
+        if options[:on_non_zero_exit_code] == :raise_error
+          raise NonZeroExitCode.new("Exit code was #{@last_exit_code}.") unless @last_exit_code == 0
+        end
       end
-      result_data
+
+      ret
+    end
+
+    ##
+    # Wrapper for +sudo_exec+ that will ignore non-zero exit codes.
+    def sudo_exec_ignore(command, &block)
+      sudo_exec command, on_non_zero_exit_code: :ignore, &block
+    end
+
+    ##
+    # Wrapper for +sudo_exec+ that will raise an error on non-zero exit codes.
+    def sudo_exec_raise(command, &block)
+      sudo_exec command, on_non_zero_exit_code: :raise_error, &block
+    end
+
+    ##
+    # Executes a command using +sudo+ during the shell session.
+    #
+    # This is a wrapper around +exec+ that attempts to run the command as root.
+    # It provides the configured user's password if/when prompted.
+    #
+    # See +exec+ for more information.
+    def sudo_exec(command, options = {}, &block)
+      sudo_prompt = '[sp:'
+      sudo_match = /\[sp:\w*$/
+      sudo_strip = /\[sp:\w*\n/
+      ret = exec("sudo -p \"#{sudo_prompt}\" bash -c \"#{command.gsub('"', '\\"')}\"", options) do |data,type|
+        if sudo_match.match(data)
+          @options[:password]
+        else
+          if block
+            block.call(data, type)
+          else
+            nil
+          end
+        end
+      end
+      # remove the sudo prompts.
+      ret.gsub(sudo_strip, '')
     end
 
     ##
@@ -292,6 +383,20 @@ module BarkestSsh
       @channel.wait
     end
 
+    def command_output(command)
+      # get everyting except for the ending prompt.
+      ret = combined_output[0...-(@options[:prompt].length)]
+      # return the output from the command starting with the second line.
+      # the first line is the command sent to the shell.
+      # We also check for those rare times when a prompt manages to sneak in, trimming them off the front as well.
+      result_cmd,_,result_data = ret.partition("\n")
+      cmd_with_prompt = @options[:prompt] + command
+      until result_cmd == command || result_cmd == cmd_with_prompt || result_data.to_s.strip == ''
+        result_cmd,_,result_data = result_data.partition("\n")
+      end
+      result_data
+    end
+
     def stdout_hist
       @stdout_hist ||= []
     end
@@ -336,6 +441,19 @@ module BarkestSsh
       end
       if (hist = stdcomb_hist.pop)
         @stdcomb = hist + combined_output
+      end
+    end
+
+    def pop_discard_buffer
+      # a standard pop discarding current data and retrieving the history.
+      if (hist = stdout_hist.pop)
+        @stdout = hist
+      end
+      if (hist = stderr_hist.pop)
+        @stderr = hist
+      end
+      if (hist = stdcomb_hist.pop)
+        @stdcomb = hist
       end
     end
 
@@ -440,7 +558,7 @@ module BarkestSsh
           .gsub(/\e\[(\d+;"[^"]+";?)+p/, '')        #   \e[#;"A"p
           .gsub(/\e[NOc]./,'?')                     #   any of the alternate character set commands.
           .gsub(/\e[P_\]^X][^\e\a]*(\a|(\e\\))/,'') #   any string command
-          .gsub(/[\x00\x08\x0B\x0C\x0E-\x1F]/, '')  #   any non-printable characters.
+          .gsub(/[\x00\x08\x0B\x0C\x0E-\x1F]/, '')  #   any non-printable characters (notice \x0A (LF) and \x0D (CR) are left as is).
           .gsub("\t", ' ')                          #   turn tabs into spaces.
     end
 

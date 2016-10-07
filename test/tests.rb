@@ -43,6 +43,23 @@ if $0 == __FILE__
       raise ShellTestError, 'result should not be blank' if results == ''
       print "Done (#{results})\n"
 
+      print 'Executing invalid command ... '
+      begin
+        shell.exec_raise 'do-something-invalid this should return an exit code of 127 since the command should not be found'
+        raise ShellTestError, "an error should have been raised and the exit code (#{shell.last_exit_code}) should not be zero"
+      rescue ::BarkestSsh::SecureShell::NonZeroExitCode
+        print "Done (Received error as expected)\n"
+      end
+
+      print 'Executing sudo command ... '
+      begin
+        results = shell.sudo_exec('echo "user is a sudoer"').strip
+        raise ShellTestError, 'result should not be blank' if results == ''
+        print "Done (#{results})\n"
+      rescue ::BarkestSsh::SecureShell::NonZeroExitCode
+        print "Done (user does not appear to be a sudoer)\n"
+      end
+
       print 'Getting remote home path ... '
       remote_home = shell.exec("eval echo \"~#{test_user}\"").strip
       raise ShellTestError, 'result should not be blank' if remote_home == ''
