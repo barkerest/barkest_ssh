@@ -80,6 +80,9 @@ module BarkestSsh
     # *   +on_non_zero_exit_code+
     #     If the exit code is non-zero, the default behavior (to remain compatible with prior versions) is to
     #     ignore the exit code.  You can also set this to :raise_error to raise the NonZeroExitCode error.
+    # *   +filter_password+
+    #     As a convenience, if this is set to true (the default), then any text matching the configured password
+    #     will be replaced with a series of asterisks in the output.
     #
     #   SecureShell.new(
     #       host: '10.10.10.10',
@@ -102,7 +105,8 @@ module BarkestSsh
           silence_wait: (options[:silence_wait] || 5),
           replace_cr: options[:replace_cr].to_s,
           retrieve_exit_code: options[:retrieve_exit_code].nil? ? true : options[:retrieve_exit_code],
-          on_non_zero_exit_code: options[:on_non_zero_exit_code] ? options[:on_non_zero_exit_code].to_s.to_sym : :ignore
+          on_non_zero_exit_code: options[:on_non_zero_exit_code] ? options[:on_non_zero_exit_code].to_s.to_sym : :ignore,
+          filter_password: options[:filter_password].nil? ? true : options[:filter_password],
       }
 
       raise ArgumentError.new('Missing block.') unless block_given?
@@ -504,12 +508,12 @@ module BarkestSsh
       @last_input = Time.now
 
       @channel.on_data do |_, data|
-        append_stdout strip_ansi_escape(data), &block
+        append_stdout strip_ansi_escape(sterilize(data)), &block
       end
 
       @channel.on_extended_data do |_, type, data|
         if type == 1
-          append_stderr strip_ansi_escape(data), &block
+          append_stderr strip_ansi_escape(sterilize(data)), &block
         end
       end
 
@@ -549,6 +553,15 @@ module BarkestSsh
       end
 
       reset_prompted
+    end
+
+    def sterilize(data)
+      if @options[:filter_password]
+        spwd = '*' * @options[:password].length
+        data.gsub(@options[:password], spwd)
+      else
+        data
+      end
     end
 
     def strip_ansi_escape(data)
