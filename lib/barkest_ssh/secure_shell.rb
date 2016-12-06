@@ -234,7 +234,7 @@ module BarkestSsh
 
       # buffer while also passing data to the supplied block.
       if block_given?
-        buffer_input &block
+        buffer_input( &block )
       end
 
       # send the command and wait for the prompt to return.
