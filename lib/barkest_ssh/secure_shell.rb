@@ -136,15 +136,15 @@ module BarkestSsh
           non_interactive: true,
       ) do |ssh|
         @ssh = ssh
-        ssh.open_channel do |channel|
-          channel.request_pty do |channel, success|
-            raise FailedToRequestPTY.new('Failed to request PTY.') unless success
+        ssh.open_channel do |ssh_channel|
+          ssh_channel.request_pty do |pty_channel, pty_success|
+            raise FailedToRequestPTY.new('Failed to request PTY.') unless pty_success
 
-            channel.send_channel_request('shell') do |_, success|
-              raise FailedToStartShell.new('Failed to start shell.') unless success
+            pty_channel.send_channel_request('shell') do |_, shell_success|
+              raise FailedToStartShell.new('Failed to start shell.') unless shell_success
 
               # cache the channel pointer and start buffering the input.
-              @channel = channel
+              @channel = pty_channel
               buffer_input
 
               # give the shell a chance to catch up and initialize fully.
@@ -165,7 +165,7 @@ module BarkestSsh
               @channel = nil
             end
           end
-          channel.wait
+          ssh_channel.wait
         end
       end
 
